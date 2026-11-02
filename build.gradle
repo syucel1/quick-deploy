@@ -1,0 +1,90 @@
+plugins {
+    id 'base'
+}
+
+// Gradle orchestrates the native toolchains; application code stays TypeScript/C#.
+def windows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+def npmCommand = { List<String> arguments ->
+    windows ? ['cmd', '/d', '/c', 'npm.cmd'] + arguments : ['npm'] + arguments
+}
+def apiProject = 'server/QuickDeploy.Api/QuickDeploy.Api.csproj'
+
+tasks.register('webInstall', Exec) {
+    group = 'build setup'
+    description = 'Install the exact frontend dependencies from package-lock.json.'
+    workingDir 'web'
+    commandLine npmCommand(['ci', '--no-audit', '--no-fund'])
+    inputs.files('web/package.json', 'web/package-lock.json')
+    // npm's install receipt avoids hashing thousands of third-party files on every build.
+    outputs.file('web/node_modules/.package-lock.json')
+}
+
+tasks.register('webBuild', Exec) {
+    group = 'build'
+    description = 'Type-check and build the React dashboard.'
+    dependsOn 'webInstall'
+    workingDir 'web'
+    commandLine npmCommand(['run', 'build'])
+    inputs.files(fileTree('web/src') { exclude '**/*.test.mjs' })
+    inputs.files('web/index.html', 'web/tsconfig.json', 'web/package.json', 'web/package-lock.json')
+    outputs.dir('web/dist')
+}
+
+tasks.register('webTest', Exec) {
+    group = 'verification'
+    description = 'Run the inventory and deployment workflow tests.'
+    workingDir 'web'
+    commandLine 'node', '--experimental-strip-types', '--test', 'src/model.test.mjs'
+}
+
+tasks.register('serverBuild', Exec) {
+    group = 'build'
+    description = 'Restore and build the ASP.NET Core API in Release mode (.NET 10 SDK required).'
+    commandLine 'dotnet', 'build', apiProject, '--configuration', 'Release', '--nologo'
+}
+
+tasks.register('serverPublish', Exec) {
+    group = 'distribution'
+    description = 'Publish the framework-dependent API for deployment.'
+    dependsOn 'serverBuild'
+    commandLine 'dotnet', 'publish', apiProject, '--configuration', 'Release', '--no-build',
+        '--nologo', '--output', layout.buildDirectory.dir('server').get().asFile.absolutePath
+}
+
+tasks.register('webDev', Exec) {
+    group = 'application'
+    description = 'Start the Vite development server on loopback; stop with Ctrl+C.'
+    dependsOn 'webInstall'
+    workingDir 'web'
+    commandLine npmCommand(['run', 'dev'])
+}
+
+tasks.register('serverRun', Exec) {
+    group = 'application'
+    description = 'Start the API on loopback; stop with Ctrl+C.'
+    commandLine 'dotnet', 'run', '--project', apiProject
+}
+
+tasks.register('test') {
+    group = 'verification'
+    description = 'Run all current automated tests (frontend workflow tests).'
+    dependsOn 'webTest'
+}
+
+tasks.named('check') { dependsOn 'test' }
+tasks.named('assemble') { dependsOn 'webBuild', 'serverBuild' }
+
+tasks.register('distZip', Zip) {
+    group = 'distribution'
+    description = 'Package the dashboard and published API into one release ZIP.'
+    dependsOn 'webBuild', 'serverPublish', 'check'
+    archiveFileName = 'quick-deploy.zip'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from('web/dist') { into 'web' }
+    from(layout.buildDirectory.dir('server')) { into 'server' }
+    from('README.md')
+}
+
+tasks.named('clean', Delete) {
+    delete 'web/dist', 'web/tsconfig.tsbuildinfo', 'server/QuickDeploy.Api/bin', 'server/QuickDeploy.Api/obj'
+}

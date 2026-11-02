@@ -2,9 +2,33 @@
 
 First development increment of a Linux service deployment dashboard. React + TypeScript UI; ASP.NET Core API foundation. No login or audit trail.
 
-## Run the dashboard
+## Build with Gradle
 
-Requires Node.js 22+ and npm.
+Gradle is the root build entry point and delegates to npm/TypeScript and the .NET SDK. The application languages remain TypeScript and C#.
+
+Prerequisites: JDK 17+ (JDK 21 recommended), Node.js 22.18+ with npm, and .NET 10 SDK for API tasks. Set `JAVA_HOME` to your JDK and put `node`, `npm`, and `dotnet` on PATH. The checked-in wrapper downloads the pinned Gradle version on its first run; no global Gradle installation is required.
+
+Run from the repository root on Windows:
+
+```powershell
+.\gradlew.bat tasks
+.\gradlew.bat webBuild test   # Dashboard build and workflow tests; no .NET required
+.\gradlew.bat build           # Dashboard + API build + current tests
+.\gradlew.bat distZip         # Release ZIP: build/distributions/quick-deploy.zip
+.\gradlew.bat webDev          # Start the dashboard
+.\gradlew.bat serverRun       # Start the API in a second terminal
+.\gradlew.bat clean
+```
+
+On Linux/macOS, use `sh ./gradlew` with the same task names (or `./gradlew` after `chmod +x gradlew`). `webInstall` runs `npm ci` when its dependency inputs change or `node_modules` is missing. Backend tasks fail if .NET is unavailable; they are never silently skipped. `test` currently runs the frontend workflow tests; backend tests will be added with backend implementation.
+
+The release ZIP contains separate `web/` static assets and `server/` API files. It does not configure hosting or connect the sample UI to the API.
+
+On Windows, stop a running Vite preview before the first Gradle build or a dependency refresh: `npm ci` replaces `node_modules`, and the preview can hold a lock on `esbuild.exe`.
+
+## Run the dashboard directly (optional)
+
+Requires Node.js 22.18+ and npm.
 
 ```powershell
 cd web
