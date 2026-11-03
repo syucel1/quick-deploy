@@ -4,6 +4,10 @@ QuickDeploy helps development teams deploy application artifacts across multiple
 
 React + TypeScript client, ASP.NET Core backend, and Gradle build orchestration. Login and audit trails are deferred.
 
+## Roadmap
+
+See the [development roadmap](ROADMAP.md) for delivered capabilities, upcoming milestones and future plans. Open [the visual HTML roadmap](ROADMAP.htm) for a standalone page with milestone filters and print styling.
+
 ## Run locally
 
 Prerequisites: JDK 17+ (21 recommended), Node.js 22.18+ with npm, .NET 10 SDK, and an OpenSSH client on the API host for discovery. Put the toolchains on PATH and set JAVA_HOME.
