@@ -8,3 +8,6 @@ obj/
 .gradle/
 .gradle-user-home/
 build/
+.tools/
+data/
+server/QuickDeploy.Api/appsettings.Local.json

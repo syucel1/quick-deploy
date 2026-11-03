@@ -1,0 +1,16 @@
+{
+  "Inventory": {
+    "Path": "/var/lib/quickdeploy/inventory/demo.yaml"
+  },
+  "Discovery": {
+    "SshExecutable": "ssh",
+    "Profiles": {
+      "demo-reader": {
+        "User": "quickdeploy-reader",
+        "IdentityFile": "/etc/quickdeploy/ssh/demo-reader",
+        "KnownHostsFile": "/etc/quickdeploy/ssh/known_hosts",
+        "AllowedHosts": ["demo-01.example.internal"]
+      }
+    }
+  }
+}

@@ -1,72 +1,103 @@
 # QuickDeploy
 
-First development increment of a Linux service deployment dashboard. React + TypeScript UI; ASP.NET Core API foundation. No login or audit trail.
+QuickDeploy helps development teams deploy application artifacts across multiple servers, manage application inventories, and discover running versions and service health. It is designed to speed up demo releases and sanity testing.
 
-## Build with Gradle
+React + TypeScript client, ASP.NET Core backend, and Gradle build orchestration. Login and audit trails are deferred.
 
-Gradle is the root build entry point and delegates to npm/TypeScript and the .NET SDK. The application languages remain TypeScript and C#.
+## Run locally
 
-Prerequisites: JDK 17+ (JDK 21 recommended), Node.js 22.18+ with npm, and .NET 10 SDK for API tasks. Set `JAVA_HOME` to your JDK and put `node`, `npm`, and `dotnet` on PATH. The checked-in wrapper downloads the pinned Gradle version on its first run; no global Gradle installation is required.
+Prerequisites: JDK 17+ (21 recommended), Node.js 22.18+ with npm, .NET 10 SDK, and an OpenSSH client on the API host for discovery. Put the toolchains on PATH and set JAVA_HOME.
 
-Run from the repository root on Windows:
+From the repository root, in two terminals:
 
 ```powershell
-.\gradlew.bat tasks
-.\gradlew.bat webBuild test   # Dashboard build and workflow tests; no .NET required
-.\gradlew.bat build           # Dashboard + API build + current tests
-.\gradlew.bat distZip         # Release ZIP: build/distributions/quick-deploy.zip
-.\gradlew.bat webDev          # Start the dashboard
-.\gradlew.bat serverRun       # Start the API in a second terminal
+.\gradlew.bat serverRun
+.\gradlew.bat webDev
+```
+
+Open http://127.0.0.1:5174/ and select **Inventory**. Vite proxies `/api` to the API on loopback port 5080. Both processes must run. Missing API connections show an explicit error, not a sample inventory.
+
+A project-local .NET SDK was installed under the ignored `.tools/dotnet` directory during development. If using it, add its absolute directory to PATH for the terminal running Gradle. Otherwise install .NET 10 normally.
+
+## Inventory
+
+- Create/edit/remove servers, applications and instances in the UI. Changes remain a draft until **Save inventory**.
+- Stable IDs identify records. Instances reference a server, application, systemd service name and Linux installation root.
+- The API validates identifiers, references, duplicate hosts/service mappings/paths and endpoint URLs. Referenced servers/applications cannot be removed until dependent instances are reassigned or removed.
+- Saves use a revision check (HTTP 409 on a conflict), a local file lock and atomic replacement. Conflicts preserve the browser draft; reload explicitly to discard it.
+- YAML import replaces the whole saved inventory after validation. YAML export exports saved data, not unsaved draft changes. Formatting/comments are normalized by saves.
+- Start from `config/inventory.example.yaml` if preferred. Sample hosts are illustrative; no inventory is seeded automatically.
+
+Storage defaults:
+
+| Location | Purpose |
+| --- | --- |
+| `data/inventory/demo.yaml` at the repository root | Development inventory |
+| `/var/lib/quickdeploy/inventory/demo.yaml` | Published Linux backend default |
+| `<inventory-path>.discovery.json` | Latest observations and explicitly historical last-known versions |
+| `<inventory-path>.lock` | Inventory save coordination |
+
+Set `Inventory__Path` to override the path. Keep it outside the app release directory and back up the data directory. The API service account needs write access to that directory. This file implementation supports one active discovery backend; it is not a distributed state store.
+
+Real inventory, discovery state, credentials and the development SDK are ignored by Git. Never put private keys or passwords in inventory YAML.
+
+## Read-only version discovery
+
+In **Discovery**, use **Refresh all** or refresh a single instance. Four instances are checked concurrently, with a 25-second deadline per SSH process. This is on-demand discovery, not background polling; observations older than 90 seconds or tied to another inventory revision are marked stale and never presented as current facts.
+
+The fixed remote script uses only:
+
+- `systemctl show` for service state and PID before/after inspection.
+- `head`/`base64` to read `<installRoot>/current/release.json` (installed version only).
+- `curl` for local version and health endpoints (HTTP on loopback only, with request deadlines, body limits, no proxy or redirects).
+
+There are no installation, restart, sudo or remote file-write commands. Remote hosts need systemd, POSIX sh, curl, head, base64 and tr. The reader account needs permission to inspect the units and read release metadata.
+
+### SSH configuration
+
+Copy `config/backend.example.json` to `server/QuickDeploy.Api/appsettings.Local.json` for source development and edit the paths, allowed hosts and user. Remove/change its Inventory.Path if you want the development default. For a published backend, provision `appsettings.Local.json` alongside its configuration, or use .NET environment variables such as `Discovery__Profiles__demo-reader__User`.
+
+Profiles contain backend-owned identity/known-hosts paths and an explicit AllowedHosts list. Inventory edits can reference profiles but cannot supply credentials or SSH commands. SSH uses BatchMode, pinned host keys, no agent forwarding and no interactive password prompts. Provision verified host keys before scanning. Unknown profiles, disallowed hosts and missing key files show **Unconfigured** without contacting the server. Local configuration is excluded from release output.
+
+### Version contract
+
+The version endpoint must report build identity from the running process, plus application and instance identity:
+
+```json
+{
+  "application": "pricing",
+  "instanceId": "pricing-01",
+  "version": "2.18.4",
+  "buildId": "1842",
+  "commit": "a8e27bd"
+}
+```
+
+Both identities must match inventory, the service must be active, and its PID must remain stable. Build ID and commit are optional strings. A missing, malformed or mismatched endpoint yields **Unknown** running version. If a process restarts during inspection, refresh again. The version endpoint contract is trusted; the probe does not independently map its listening socket to a PID.
+
+`current/release.json` uses application/version/build metadata, but is only evidence of the installed release. An installed/running mismatch is highlighted for investigation. Health endpoints are considered healthy for HTTP 2xx; application-specific response-body checks are not yet supported. A failed scan preserves last-known version/time separately and never reports that historical value as current.
+
+## Build and checks
+
+The checked-in wrapper pins Gradle; a global Gradle install is unnecessary.
+
+```powershell
+.\gradlew.bat webBuild webTest  # Frontend only
+.\gradlew.bat serverTest        # Eight backend checks with isolated temporary data and a fake SSH executable
+.\gradlew.bat test              # Frontend + backend checks
+.\gradlew.bat build             # Frontend + API + all checks
+.\gradlew.bat distZip           # build/distributions/quick-deploy.zip
 .\gradlew.bat clean
 ```
 
-On Linux/macOS, use `sh ./gradlew` with the same task names (or `./gradlew` after `chmod +x gradlew`). `webInstall` runs `npm ci` when its dependency inputs change or `node_modules` is missing. Backend tasks fail if .NET is unavailable; they are never silently skipped. `test` currently runs the frontend workflow tests; backend tests will be added with backend implementation.
+Linux/macOS: use `sh ./gradlew` with the same tasks (or chmod +x gradlew). Windows: stop Vite before a dependency refresh; `npm ci` may need to replace a locked esbuild executable. The install task tracks npm's receipt instead of hashing the dependency tree.
 
-The release ZIP contains separate `web/` static assets and `server/` API files. It does not configure hosting or connect the sample UI to the API.
+The ZIP contains separate `web/`, `server/`, configuration examples and this README. It does not provision hosting, credentials, live inventory or a reverse proxy. In a deployed setup, serve the client and proxy `/api` to the loopback API under the same origin. API writes reject unexpected browser origins; authentication is still deferred. Keep this version local or behind your existing trusted access boundary.
 
-On Windows, stop a running Vite preview before the first Gradle build or a dependency refresh: `npm ci` replaces `node_modules`, and the preview can hold a lock on `esbuild.exe`.
+The API includes inventory GET/PUT, YAML import/export, discovery GET/POST, health, and instance lookup endpoints under `/api`. Deployment POST returns HTTP 501.
 
-## Run the dashboard directly (optional)
+## Deployment preview and next work
 
-Requires Node.js 22.18+ and npm.
+**Overview remains a separately labelled deployment simulation** using browser-local sample artifacts/topology. It does not deploy the saved real inventory. TeamCity link entry records metadata only; artifact downloads and service-changing operations are still disabled.
 
-```powershell
-cd web
-npm ci
-npm run dev
-```
-
-Open the local URL printed by Vite. `npm run build` type-checks and creates `web/dist`.
-
-### Available now
-
-- Responsive dashboard matching the approved visual direction.
-- Sample inventory: 16 applications, 8 Linux hosts, 48 systemd instances.
-- Explore instances by server or application.
-- Searchable artifact library and TeamCity link/metadata form.
-- Sequential Install → Replicate → Restart workflow, with independent progress per target.
-- Artifact state persisted in browser local storage; interrupted simulations can resume by clicking the unfinished stage after refreshing.
-- Deployment details showing systemd unit, path, source, and stage progress.
-
-**This is simulation mode.** Link imports save metadata only; they do not fetch or verify packages. All progress and running-state examples are simulated. There is no SSH connection or service control. No real deployment has been performed. Browser data is local to this origin, not shared inventory.
-
-## API foundation
-
-Requires .NET 10 SDK, which was not available in the initial development environment.
-
-```powershell
-dotnet run --project server/QuickDeploy.Api
-```
-
-The API listens on `http://127.0.0.1:5080` and serves `/api/health`, `/api/inventory`, `/api/servers/{id}/instances`, and `/api/applications/{id}/instances`. Deployment requests explicitly return HTTP 501 until adapters are configured. The UI currently uses its own sample inventory and is not connected to this API.
-
-## Next integration increment
-
-1. Confirm systemd service conventions, installation package format, paths, instance-specific configuration, health checks, and restart concurrency.
-2. Add PostgreSQL inventory, versioned configuration imports, artifact records and durable deployment jobs. The application/instance/server relationship remains separate from observed service health.
-3. Configure a fixed TeamCity base URL and server-side token; download immutable builds to artifact storage and verify checksums. Do not fetch arbitrary user-supplied URLs without host validation.
-4. Add SSH execution using host-key verification, a restricted deployment account, release directories, bounded parallelism, timeouts, per-instance locks and recovery for failed operations.
-5. Deploy the same artifact independently to targets while preserving instance configuration. Atomically activate a release, restart via systemd and verify health before reporting success.
-6. Stream job progress through SignalR. Add cancellation, retries and rollback behavior before live use.
-
-Login and audit trails are deferred. Keep this initial unauthenticated prototype on loopback. Live shared-network deployment needs a separately agreed access boundary.
+Next: verified TeamCity downloads, durable deployment jobs, bounded deployment execution, health-gated restarts, retries/rollback, then authentication/audit trails and later container support. YAML remains the inventory source of truth; a database may be added for job state.

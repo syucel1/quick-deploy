@@ -26,7 +26,7 @@ tasks.register('webBuild', Exec) {
     workingDir 'web'
     commandLine npmCommand(['run', 'build'])
     inputs.files(fileTree('web/src') { exclude '**/*.test.mjs' })
-    inputs.files('web/index.html', 'web/tsconfig.json', 'web/package.json', 'web/package-lock.json')
+    inputs.files('web/index.html', 'web/tsconfig.json', 'web/vite.config.ts', 'web/package.json', 'web/package-lock.json')
     outputs.dir('web/dist')
 }
 
@@ -41,6 +41,12 @@ tasks.register('serverBuild', Exec) {
     group = 'build'
     description = 'Restore and build the ASP.NET Core API in Release mode (.NET 10 SDK required).'
     commandLine 'dotnet', 'build', apiProject, '--configuration', 'Release', '--nologo'
+}
+
+tasks.register('serverTest', Exec) {
+    group = 'verification'
+    description = 'Run isolated inventory persistence and read-only discovery checks.'
+    commandLine 'dotnet', 'run', '--project', 'server/QuickDeploy.Tests', '--configuration', 'Release'
 }
 
 tasks.register('serverPublish', Exec) {
@@ -67,8 +73,8 @@ tasks.register('serverRun', Exec) {
 
 tasks.register('test') {
     group = 'verification'
-    description = 'Run all current automated tests (frontend workflow tests).'
-    dependsOn 'webTest'
+    description = 'Run frontend workflow and backend inventory/discovery tests.'
+    dependsOn 'webTest', 'serverTest'
 }
 
 tasks.named('check') { dependsOn 'test' }
@@ -83,8 +89,9 @@ tasks.register('distZip', Zip) {
     from('web/dist') { into 'web' }
     from(layout.buildDirectory.dir('server')) { into 'server' }
     from('README.md')
+    from('config') { into 'config-examples' }
 }
 
 tasks.named('clean', Delete) {
-    delete 'web/dist', 'web/tsconfig.tsbuildinfo', 'server/QuickDeploy.Api/bin', 'server/QuickDeploy.Api/obj'
+    delete 'web/dist', 'web/tsconfig.tsbuildinfo', 'server/QuickDeploy.Api/bin', 'server/QuickDeploy.Api/obj', 'server/QuickDeploy.Tests/bin', 'server/QuickDeploy.Tests/obj'
 }

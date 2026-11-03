@@ -1,0 +1,21 @@
+schemaVersion: 1
+environment: demo
+servers:
+  - id: demo-01
+    name: Demo server 01
+    host: demo-01.example.internal
+    sshProfile: demo-reader
+    port: 22
+applications:
+  - id: pricing
+    name: Pricing Service
+    teamCityBuildType: Pricing_Release
+    artifactPath: pricing.tar.gz
+instances:
+  - id: pricing-01
+    applicationId: pricing
+    serverId: demo-01
+    serviceName: pricing@01.service
+    installRoot: /opt/trading/pricing-01
+    versionUrl: http://127.0.0.1:8101/version
+    healthUrl: http://127.0.0.1:8101/health
