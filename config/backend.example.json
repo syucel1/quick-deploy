@@ -12,5 +12,15 @@
         "AllowedHosts": ["demo-01.example.internal"]
       }
     }
+  },
+  "TeamCity": {
+    "BaseUrl": "https://teamcity.example.internal",
+    "Token": "",
+    "RequireChecksum": false,
+    "MaxArtifactBytes": 2147483648,
+    "DownloadTimeoutMinutes": 30
+  },
+  "Artifacts": {
+    "Path": "/var/lib/quickdeploy/artifacts"
   }
 }
