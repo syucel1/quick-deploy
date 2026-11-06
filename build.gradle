@@ -32,9 +32,9 @@ tasks.register('webBuild', Exec) {
 
 tasks.register('webTest', Exec) {
     group = 'verification'
-    description = 'Run the inventory and deployment workflow tests.'
+    description = 'Run the inventory, deployment workflow and artifact import UI tests.'
     workingDir 'web'
-    commandLine 'node', '--experimental-strip-types', '--test', 'src/model.test.mjs'
+    commandLine 'node', '--experimental-strip-types', '--test', 'src/model.test.mjs', 'src/artifacts.test.mjs'
 }
 
 tasks.register('serverBuild', Exec) {
@@ -45,7 +45,7 @@ tasks.register('serverBuild', Exec) {
 
 tasks.register('serverTest', Exec) {
     group = 'verification'
-    description = 'Run isolated inventory persistence and read-only discovery checks.'
+    description = 'Run isolated inventory, read-only discovery and TeamCity artifact import checks.'
     commandLine 'dotnet', 'run', '--project', 'server/QuickDeploy.Tests', '--configuration', 'Release'
 }
 
@@ -73,7 +73,7 @@ tasks.register('serverRun', Exec) {
 
 tasks.register('test') {
     group = 'verification'
-    description = 'Run frontend workflow and backend inventory/discovery tests.'
+    description = 'Run frontend workflow and backend inventory/discovery/artifact tests.'
     dependsOn 'webTest', 'serverTest'
 }
 

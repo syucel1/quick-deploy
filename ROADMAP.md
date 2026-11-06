@@ -4,7 +4,7 @@ Here’s what’s coming up next on the application roadmap.
 
 QuickDeploy helps development teams deploy application artifacts across multiple servers, manage application inventories, and discover running versions and service health. It is designed to speed up demo releases and sanity testing.
 
-**Last reviewed:** 3 November 2026  
+**Last reviewed:** 6 November 2026  
 **North star:** a full demo deployment in under one hour, from artifact import through successful service health checks.  
 **Current platform:** React/TypeScript client, ASP.NET Core backend, Gradle build, Linux/systemd targets.
 
@@ -16,7 +16,7 @@ This is a sequenced product roadmap, not a release-date commitment. Priorities w
 | --- | --- | --- |
 | 01 | [Inventory & visibility](#foundation) | Delivered |
 | 02 | [Validate against the real estate](#pilot) | Next |
-| 03 | [Verified TeamCity artifacts](#artifacts) | Next |
+| 03 | [Verified TeamCity artifacts](#artifacts) | In progress |
 | 04 | [Install, replicate & restart](#deployment) | Planned |
 | 05 | [Operate & collaborate](#operations) | Later |
 | 06 | [Container deployment support](#containers) | Future |
@@ -57,16 +57,18 @@ This is a sequenced product roadmap, not a release-date commitment. Priorities w
 
 ### 03 · Verified TeamCity artifacts
 
-**Status: Next.** Turn a build link into a reproducible deployment input.
+**Status: In progress.** Turn a build link into a reproducible deployment input.
 
 - Connect to an approved TeamCity base URL using backend-managed credentials.
 - Resolve the exact application, build ID and artifact path from a submitted build link.
 - Download packages into backend artifact storage; record version, commit, checksum and size.
 - Show real import progress and failures, verify expected checksums where available, and reject incomplete downloads.
 
+**Current outcome:** Import is implemented in the backend and the **Artifacts** view, and covered by automated checks against a fake TeamCity server. Only links that pin one finished, successful build are accepted; the application is matched by its TeamCity build type; downloads are size- and SHA-256-checked (against a published `<artifact>.sha256` file when present) before they enter the library. It still needs validation against the real TeamCity server.
+
 **Success criteria:** a selected immutable build can be imported, verified and retrieved from the artifact library with traceable build metadata.
 
-**Dependencies / scope:** Requires TeamCity API access, artifact conventions, storage and a retention policy.
+**Dependencies / scope:** Requires a TeamCity access token, agreement on artifact conventions (version = TeamCity build number; optional `.sha256` sidecar) and a retention policy. No automatic retention or deletion is implemented yet.
 
 <a id="deployment"></a>
 
@@ -123,6 +125,6 @@ This is a sequenced product roadmap, not a release-date commitment. Priorities w
 
 ## Current limits
 
-Inventory editing and read-only discovery are implemented. Real discovery requires configured SSH profiles, host keys and service endpoints. TeamCity entry in the deployment preview records sample metadata only; real artifact downloads, installation, replication and restarts are future work. No production-readiness or live-server validation is implied by the delivered foundation.
+Inventory editing, read-only discovery and verified TeamCity artifact import are implemented. Real discovery requires configured SSH profiles, host keys and service endpoints; real imports require a configured TeamCity base URL and token. The Overview deployment preview still uses sample data; installation, replication and restarts are future work. No production-readiness or live-server validation is implied by the delivered foundation.
 
 [Project setup](README.md) · [Visual roadmap](ROADMAP.htm)
