@@ -13,5 +13,6 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
     const problem = await response.json().catch(() => ({}));
     throw new ApiError(response.status, Array.isArray(problem.errors) ? problem.errors.join('\n') : problem.detail || problem.title || 'API request failed. Check that the backend is running on port 5080.');
   }
+  if (response.status === 204) return undefined as T;
   return response.json();
 }

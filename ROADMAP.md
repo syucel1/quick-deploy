@@ -64,11 +64,11 @@ This is a sequenced product roadmap, not a release-date commitment. Priorities w
 - Download packages into backend artifact storage; record version, commit, checksum and size.
 - Show real import progress and failures, verify expected checksums where available, and reject incomplete downloads.
 
-**Current outcome:** Import is implemented in the backend and the **Artifacts** view, and covered by automated checks against a fake TeamCity server. Only links that pin one finished, successful build are accepted; the application is matched by its TeamCity build type; downloads are size- and SHA-256-checked (against a published `<artifact>.sha256` file when present) before they enter the library. It still needs validation against the real TeamCity server.
+**Current outcome:** Import is implemented in the backend and the **Artifacts** view, and covered by automated checks against a fake TeamCity server. Only links that pin one finished, successful build are accepted; the application is matched by its TeamCity build type; downloads are size- and SHA-256-checked (against a published `<artifact>.sha256` file when present) before they enter the library. Builds can be deleted from the library, and a keep-newest-*N*-per-application retention policy can be previewed, applied on demand or run after every import; builds that discovery reports as installed or running are never removed. It still needs validation against the real TeamCity server.
 
 **Success criteria:** a selected immutable build can be imported, verified and retrieved from the artifact library with traceable build metadata.
 
-**Dependencies / scope:** Requires a TeamCity access token, agreement on artifact conventions (version = TeamCity build number; optional `.sha256` sidecar) and a retention policy. No automatic retention or deletion is implemented yet.
+**Dependencies / scope:** Requires a TeamCity access token, agreement on artifact conventions (version = TeamCity build number; optional `.sha256` sidecar) and an agreed retention count for demo environments (`Artifacts:KeepPerApplication`; off by default).
 
 <a id="deployment"></a>
 
@@ -125,6 +125,6 @@ This is a sequenced product roadmap, not a release-date commitment. Priorities w
 
 ## Current limits
 
-Inventory editing, read-only discovery and verified TeamCity artifact import are implemented. Real discovery requires configured SSH profiles, host keys and service endpoints; real imports require a configured TeamCity base URL and token. The Overview deployment preview still uses sample data; installation, replication and restarts are future work. No production-readiness or live-server validation is implied by the delivered foundation.
+Inventory editing, read-only discovery, verified TeamCity artifact import and artifact retention are implemented. Real discovery requires configured SSH profiles, host keys and service endpoints; real imports require a configured TeamCity base URL and token. The Overview deployment preview still uses sample data; installation, replication and restarts are future work. No production-readiness or live-server validation is implied by the delivered foundation.
 
 [Project setup](README.md) · [Visual roadmap](ROADMAP.htm)
