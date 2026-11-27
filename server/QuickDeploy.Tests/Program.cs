@@ -222,6 +222,94 @@ cases.Add(("Unconfigured TeamCity fails closed without contacting the server", a
     }
     Assert(fake.Requests.Count == 0, "TeamCity was contacted without configuration.");
 }));
+// Writes a library entry exactly as an import would, so retention can be exercised across many builds.
+async Task<ArtifactRecord> Seed(string library, string application, int build, string version, int minutesAgo, bool damaged = false)
+{
+    var record = new ArtifactRecord(application, build.ToString(), version, version, "c0ffee", "main", "Pricing_Release", "dist/pricing.tar.gz", "pricing.tar.gz",
+        package.Length, packageSha, true, "teamcity-sha256-file", DateTimeOffset.UtcNow.AddMinutes(-minutesAgo), teamCityBase + "build/" + build);
+    var folder = Path.Combine(library, application, record.BuildId);
+    Directory.CreateDirectory(folder);
+    await File.WriteAllTextAsync(Path.Combine(folder, "artifact.json"), JsonSerializer.Serialize(record, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    await File.WriteAllBytesAsync(Path.Combine(folder, "pricing.tar.gz"), damaged ? package[..10] : package);
+    return record;
+}
+DiscoveryObservation Seen(string instanceId, string? installed, string? running = null) =>
+    new(instanceId, "rev", DateTimeOffset.UtcNow, "observed", "active", "healthy", installed, running, null, null, "version-endpoint", null);
+string Builds(IEnumerable<ArtifactEntry> entries) => string.Join(",", entries.Select(e => e.Artifact.BuildId).Order(StringComparer.Ordinal));
+
+cases.Add(("Retention keeps the newest builds per application and never removes installed or running versions", async () =>
+{
+    var store = await ArtifactInventory("retention", d => d.Applications.Add(new() { Id = "risk", Name = "Risk Engine" }));
+    var library = Path.Combine(directory, "artifacts-retention");
+    for (var build = 101; build <= 106; build++) await Seed(library, "pricing", build, $"2.{build}", 110 - build); // 101 oldest … 106 newest available
+    await Seed(library, "risk", 201, "1.0", 500);
+    await Seed(library, "pricing", 107, "2.107", 0, damaged: true);
+    var seen = new List<DiscoveryObservation> { Seen("pricing-01", installed: "2.101", running: "2.102"), Seen("ghost-instance", installed: "2.103") };
+    var service = new ArtifactService(store, teamCityOptions, library, new FakeTeamCity(package, packageSha), observations: _ => Task.FromResult(seen));
+
+    var listed = await service.List();
+    Assert(Builds(listed.Where(e => e.InUseBy!.Count > 0)) == "101,102" && listed.First(e => e.Artifact.BuildId == "101").InUseBy!.Single() == "pricing-01",
+        "Usage must come from observations of instances in the saved inventory only.");
+    var off = await service.PlanRetention(null);
+    Assert(off.KeepPerApplication == 0 && off.Remove.Count == 0, "Retention must be off unless configured or requested.");
+    try { await service.ApplyRetention(null); throw new Exception("Unconfigured retention was applied."); } catch (ArtifactImportException e) when (e.Status == 400) { }
+    try { await service.PlanRetention(0); throw new Exception("Keeping zero builds was accepted."); } catch (ArtifactImportException e) when (e.Status == 400) { }
+
+    var plan = await service.PlanRetention(2);
+    // Damaged 107 sits inside the window but does not count; 106 and 105 are kept; 104/103 go; 102/101 are installed or running.
+    Assert(Builds(plan.Remove) == "103,104" && Builds(plan.Protected) == "101,102" && plan.ReclaimBytes == 2L * package.Length, $"Unexpected plan: remove {Builds(plan.Remove)}, protected {Builds(plan.Protected)}.");
+    Assert((await service.List()).Count == 8, "Previewing retention must not delete anything.");
+    var result = await service.ApplyRetention(2);
+    Assert(result.Removed.Count == 2 && result.ReclaimedBytes == 2L * package.Length && result.Skipped.Count == 0, "Retention did not remove the planned builds.");
+    var remaining = await service.List();
+    Assert(Builds(remaining) == "101,102,105,106,107,201", "Wrong builds survived retention: " + Builds(remaining));
+    Assert(!Directory.Exists(Path.Combine(library, "pricing", "103")) && (!Directory.Exists(Path.Combine(library, ".deleting")) || !Directory.EnumerateFileSystemEntries(Path.Combine(library, ".deleting")).Any()),
+        "Removed builds left files behind.");
+    Assert((await service.ApplyRetention(2)).Removed.Count == 0, "Retention is not idempotent.");
+}));
+cases.Add(("Manual delete removes one build, refuses builds in use and fails closed when discovery is unreadable", async () =>
+{
+    var store = await ArtifactInventory("delete");
+    var library = Path.Combine(directory, "artifacts-delete");
+    await Seed(library, "pricing", 301, "3.1", 20);
+    await Seed(library, "pricing", 302, "3.2", 10);
+    var seen = new List<DiscoveryObservation> { Seen("pricing-01", installed: "3.2") };
+    var service = new ArtifactService(store, teamCityOptions, library, new FakeTeamCity(package, packageSha), observations: _ => Task.FromResult(seen));
+    try { await service.Delete("pricing", "302", default); throw new Exception("Deleted an installed build."); } catch (ArtifactImportException e) when (e.Status == 409 && e.Message.Contains("pricing-01")) { }
+    try { await service.Delete("pricing", "999", default); throw new Exception("Deleted a missing build."); } catch (ArtifactImportException e) when (e.Status == 404) { }
+    try { await service.Delete("../pricing", "301", default); throw new Exception("Accepted a path-like application ID."); } catch (ArtifactImportException e) when (e.Status == 404) { }
+    await service.Delete("pricing", "301", default);
+    Assert(Builds(await service.List()) == "302" && !Directory.Exists(Path.Combine(library, "pricing", "301")), "Manual delete did not remove exactly one build.");
+    seen.Clear();
+    await service.Delete("pricing", "302", default);
+    Assert((await service.List()).Count == 0 && !Directory.Exists(Path.Combine(library, "pricing")), "Last build delete should also remove the empty application folder.");
+
+    await Seed(library, "pricing", 303, "3.3", 5);
+    var broken = new ArtifactService(store, teamCityOptions, library, new FakeTeamCity(package, packageSha), observations: _ => throw new JsonException("corrupt"));
+    Assert((await broken.List()).Single().InUseBy is null, "Unknown usage must be reported as unknown, not unused.");
+    try { await broken.Delete("pricing", "303", default); throw new Exception("Deleted while usage was unknown."); } catch (ArtifactImportException e) when (e.Status == 503) { }
+    try { await broken.ApplyRetention(1); throw new Exception("Applied retention while usage was unknown."); } catch (ArtifactImportException e) when (e.Status == 503) { }
+    Assert((await broken.List()).Count == 1, "A fail-closed delete removed files.");
+}));
+cases.Add(("Configured retention runs after each new import and never removes the build just imported", async () =>
+{
+    var store = await ArtifactInventory("auto-retention");
+    var library = Path.Combine(directory, "artifacts-auto");
+    await Seed(library, "pricing", 401, "4.1", 30);
+    await Seed(library, "pricing", 402, "4.2", 20);
+    await Seed(library, "pricing", 403, "4.3", 10);
+    var seen = new List<DiscoveryObservation> { Seen("pricing-01", installed: null, running: "4.1") };
+    var service = new ArtifactService(store, teamCityOptions, library, new FakeTeamCity(package, packageSha),
+        new ArtifactStorageOptions { KeepPerApplication = 2 }, _ => Task.FromResult(seen));
+    Assert((await service.PlanRetention(null)).KeepPerApplication == 2, "Configured retention was not used by default.");
+    var job = service.Start(teamCityBase + "build/1842", default);
+    for (var i = 0; i < 200 && service.Job(job.Id)!.FinishedAt is null; i++) await Task.Delay(25);
+    Assert(service.Job(job.Id)!.State == "completed", "Import failed: " + service.Job(job.Id)!.Error);
+    Assert(Builds(await service.List()) == "1842,401,403", "Automatic retention kept the wrong builds: " + Builds(await service.List()));
+    Directory.CreateDirectory(Path.Combine(library, ".deleting", "interrupted"));
+    _ = new ArtifactService(store, teamCityOptions, library, new FakeTeamCity(package, packageSha), observations: _ => Task.FromResult(seen));
+    Assert(!Directory.Exists(Path.Combine(library, ".deleting")), "Interrupted deletions are not cleaned on start.");
+}));
 var failed = 0;
 try
 {

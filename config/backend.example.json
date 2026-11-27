@@ -21,6 +21,7 @@
     "DownloadTimeoutMinutes": 30
   },
   "Artifacts": {
-    "Path": "/var/lib/quickdeploy/artifacts"
+    "Path": "/var/lib/quickdeploy/artifacts",
+    "KeepPerApplication": 0
   }
 }

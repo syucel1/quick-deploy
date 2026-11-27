@@ -14,7 +14,9 @@ var defaultArtifactPath = repository is not null ? Path.Combine(repository.FullN
 var artifactPath = Path.GetFullPath(builder.Configuration["Artifacts:Path"] ?? defaultArtifactPath);
 var inventoryStore = new InventoryStore(inventoryPath);
 builder.Services.AddSingleton(inventoryStore);
-builder.Services.AddSingleton(new ArtifactService(inventoryStore, builder.Configuration.GetSection("TeamCity").Get<TeamCityOptions>() ?? new(), artifactPath));
+builder.Services.AddSingleton(services => new ArtifactService(inventoryStore, builder.Configuration.GetSection("TeamCity").Get<TeamCityOptions>() ?? new(), artifactPath,
+    storageOptions: builder.Configuration.GetSection("Artifacts").Get<ArtifactStorageOptions>() ?? new(),
+    observations: token => services.GetRequiredService<DiscoveryService>().Read(token)));
 builder.Services.AddSingleton<IReadOnlyProbe, SshReadOnlyProbe>();
 builder.Services.AddSingleton(services => new DiscoveryService(services.GetRequiredService<InventoryStore>(),
     services.GetRequiredService<IReadOnlyProbe>(), inventoryPath + ".discovery.json"));
@@ -67,9 +69,16 @@ app.MapPost("/api/artifacts/imports", (ImportArtifact request, ArtifactService a
     var job = artifacts.Start(request.Link, app.Lifetime.ApplicationStopping);
     return Results.Accepted($"/api/artifacts/imports/{job.Id}", job);
 });
+app.MapGet("/api/artifacts/retention", (int? keep, ArtifactService artifacts, CancellationToken token) => artifacts.PlanRetention(keep, null, token));
+app.MapPost("/api/artifacts/retention", (ApplyRetention request, ArtifactService artifacts, CancellationToken token) => artifacts.ApplyRetention(request.KeepPerApplication, null, token));
 app.MapGet("/api/artifacts/imports/{id}", (string id, ArtifactService artifacts) => artifacts.Job(id) is { } job ? Results.Ok(job) : Results.NotFound());
 app.MapGet("/api/artifacts/{applicationId}/{buildId}", async (string applicationId, string buildId, ArtifactService artifacts, CancellationToken token) =>
     await artifacts.Find(applicationId, buildId, token) is { } entry ? Results.Ok(entry) : Results.NotFound());
+app.MapDelete("/api/artifacts/{applicationId}/{buildId}", async (string applicationId, string buildId, ArtifactService artifacts, CancellationToken token) =>
+{
+    await artifacts.Delete(applicationId, buildId, token);
+    return Results.NoContent();
+});
 app.MapGet("/api/artifacts/{applicationId}/{buildId}/download", async (string applicationId, string buildId, ArtifactService artifacts, CancellationToken token) =>
     await artifacts.Find(applicationId, buildId, token) is { Status: "available" } entry
         ? Results.File(artifacts.FilePath(entry.Artifact), "application/octet-stream", entry.Artifact.FileName, enableRangeProcessing: true)

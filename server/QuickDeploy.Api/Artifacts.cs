@@ -17,11 +17,21 @@ public sealed class TeamCityOptions
     public long MaxArtifactBytes { get; set; } = 2L * 1024 * 1024 * 1024;
     public int DownloadTimeoutMinutes { get; set; } = 30;
 }
+public sealed class ArtifactStorageOptions
+{
+    // 0 keeps every imported build. A positive value keeps that many most recently imported builds per application,
+    // applied after each new import. Builds that discovery reports as installed or running are never removed.
+    public int KeepPerApplication { get; set; }
+}
 public sealed record TeamCityBuildLink(long BuildId, string? BuildTypeId, string? ArtifactPath);
 public sealed record ArtifactRecord(string ApplicationId, string BuildId, string BuildNumber, string Version, string? Commit, string? Branch,
     string BuildTypeId, string ArtifactPath, string FileName, long Size, string Sha256, bool ChecksumVerified, string ChecksumSource,
     DateTimeOffset ImportedAt, string BuildUrl);
-public sealed record ArtifactEntry(ArtifactRecord Artifact, string Status);
+// InUseBy lists instance IDs whose latest discovery reports this build as installed or running; null when discovery state is unreadable.
+public sealed record ArtifactEntry(ArtifactRecord Artifact, string Status, IReadOnlyList<string>? InUseBy = null);
+public sealed record RetentionPlan(int KeepPerApplication, int ConfiguredKeepPerApplication, List<ArtifactEntry> Remove, long ReclaimBytes, List<ArtifactEntry> Protected);
+public sealed record RetentionResult(int KeepPerApplication, List<ArtifactRecord> Removed, long ReclaimedBytes, List<string> Skipped);
+public sealed record ApplyRetention(int? KeepPerApplication);
 public sealed record ImportArtifact(string? Link);
 public sealed record TeamCityStatus(bool Configured, string? BaseUrl, bool RequireChecksum, string? Detail);
 public sealed record ImportJobStatus(string Id, string State, string Link, string? ApplicationId, string? BuildId, string? BuildNumber,
@@ -99,19 +109,29 @@ public sealed class ArtifactService
     private readonly SemaphoreSlim storage = new(1, 1);
     private readonly SemaphoreSlim slots = new(2, 2);
     private readonly Dictionary<string, ImportJob> jobs = [];
+    private readonly ArtifactStorageOptions storageOptions;
+    private readonly Func<CancellationToken, Task<List<DiscoveryObservation>>> observations;
+    public const int MaxKeepPerApplication = 1000;
 
-    public ArtifactService(InventoryStore inventory, TeamCityOptions options, string root, HttpMessageHandler? handler = null)
+    public ArtifactService(InventoryStore inventory, TeamCityOptions options, string root, HttpMessageHandler? handler = null,
+        ArtifactStorageOptions? storageOptions = null, Func<CancellationToken, Task<List<DiscoveryObservation>>>? observations = null)
     {
         this.inventory = inventory;
         this.options = options;
+        this.storageOptions = storageOptions ?? new();
+        this.observations = observations ?? (_ => Task.FromResult(new List<DiscoveryObservation>()));
         this.root = Path.GetFullPath(root);
         // Redirects are never followed: the token must only ever be sent to the approved TeamCity address.
         http = new HttpClient(handler ?? new SocketsHttpHandler { AllowAutoRedirect = false, ConnectTimeout = TimeSpan.FromSeconds(10), AutomaticDecompression = DecompressionMethods.None })
         { Timeout = Timeout.InfiniteTimeSpan };
         // Interrupted imports never become library entries; discard their leftovers.
-        try { if (Directory.Exists(Incoming)) Directory.Delete(Incoming, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        // Deletions are moved aside first so a half-removed build never appears in the library; finish any that were interrupted.
+        foreach (var leftovers in new[] { Incoming, Deleting })
+            try { if (Directory.Exists(leftovers)) Directory.Delete(leftovers, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
     private string Incoming => Path.Combine(root, ".incoming");
+    private string Deleting => Path.Combine(root, ".deleting");
+    public int ConfiguredKeepPerApplication => Math.Clamp(storageOptions.KeepPerApplication, 0, MaxKeepPerApplication);
 
     public TeamCityStatus Status()
     {
@@ -149,7 +169,15 @@ public sealed class ArtifactService
         try
         {
             await slots.WaitAsync(stopping);
-            try { var (record, existing) = await Import(job.Link, job, stopping); job.Complete(record, existing); }
+            try
+            {
+                var (record, existing) = await Import(job.Link, job, stopping);
+                // Automatic retention never fails an import that is already safely in the library.
+                if (!existing && ConfiguredKeepPerApplication > 0)
+                    try { await ApplyRetention(ConfiguredKeepPerApplication, record.ApplicationId, stopping); }
+                    catch (Exception exception) when (exception is ArtifactImportException or IOException or UnauthorizedAccessException or JsonException) { }
+                job.Complete(record, existing);
+            }
             finally { slots.Release(); }
         }
         catch (ArtifactImportException exception) { job.Fail(exception.Message); }
@@ -255,7 +283,101 @@ public sealed class ArtifactService
         foreach (var applicationDirectory in Directory.EnumerateDirectories(root).Where(d => InventoryValidation.Id(Path.GetFileName(d))))
             foreach (var buildDirectory in Directory.EnumerateDirectories(applicationDirectory))
                 if (await Find(Path.GetFileName(applicationDirectory), Path.GetFileName(buildDirectory), cancellationToken) is { } entry) entries.Add(entry);
-        return entries.OrderByDescending(e => e.Artifact.ImportedAt).ToList();
+        var usage = await Usage(cancellationToken);
+        return entries.Select(e => e with { InUseBy = usage is null ? null : UsedBy(usage, e.Artifact) })
+            .OrderByDescending(e => e.Artifact.ImportedAt).ThenByDescending(e => e.Artifact.BuildId.Length).ThenByDescending(e => e.Artifact.BuildId, StringComparer.Ordinal).ToList();
+    }
+
+    // Instances whose latest observation reports a version or build ID. Null means discovery state could not be read,
+    // in which case nothing may be deleted because usage is unknown.
+    private async Task<List<(string ApplicationId, string InstanceId, string? BuildId, string[] Versions)>?> Usage(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var instances = (await inventory.Read(cancellationToken)).Inventory.Instances.ToDictionary(i => i.Id, i => i.ApplicationId);
+            return (await observations(cancellationToken))
+                .Where(o => instances.ContainsKey(o.InstanceId))
+                .Select(o => (instances[o.InstanceId], o.InstanceId, o.BuildId,
+                    new[] { o.InstalledVersion, o.RunningVersion, o.LastKnownRunningVersion }.OfType<string>().Distinct().ToArray()))
+                .ToList();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InventoryValidationException) { return null; }
+    }
+    private static string[] UsedBy(List<(string ApplicationId, string InstanceId, string? BuildId, string[] Versions)> usage, ArtifactRecord record) =>
+        usage.Where(u => u.ApplicationId == record.ApplicationId && (u.BuildId == record.BuildId || u.Versions.Contains(record.Version, StringComparer.Ordinal)))
+            .Select(u => u.InstanceId).Distinct().Order(StringComparer.Ordinal).ToArray();
+    private static ArtifactImportException UsageUnknown() => new(503, "Discovery state unavailable",
+        "Cannot tell which builds are installed or running because the discovery state could not be read. Nothing was deleted. Check the discovery file, then try again.");
+
+    public async Task Delete(string applicationId, string buildId, CancellationToken cancellationToken)
+    {
+        var entry = (await List(cancellationToken)).FirstOrDefault(e => e.Artifact.ApplicationId == applicationId && e.Artifact.BuildId == buildId)
+            ?? throw new ArtifactImportException(404, "Artifact not found", $"Build {buildId} of '{applicationId}' is not in the library.");
+        if (entry.InUseBy is null) throw UsageUnknown();
+        if (entry.InUseBy.Count > 0) throw new ArtifactImportException(409, "Artifact in use",
+            $"v{entry.Artifact.Version} (build {buildId}) is installed or running on {string.Join(", ", entry.InUseBy)} according to the latest discovery. Deploy another version and rescan before deleting it.");
+        await Remove(entry.Artifact, cancellationToken);
+    }
+
+    // Keeps the newest `keep` available builds per application (by import time); older builds are removed unless in use.
+    // Damaged copies inside the kept window are left alone so they can be re-imported.
+    public async Task<RetentionPlan> PlanRetention(int? keep, string? applicationId = null, CancellationToken cancellationToken = default)
+    {
+        var configured = ConfiguredKeepPerApplication;
+        var effective = keep ?? configured;
+        if (keep is null && effective == 0) return new(0, configured, [], 0, []);
+        if (effective is < 1 or > MaxKeepPerApplication)
+            throw new ArtifactImportException(400, "Invalid retention", $"Keep between 1 and {MaxKeepPerApplication} builds per application.");
+        var entries = await List(cancellationToken);
+        if (entries.Any(e => e.InUseBy is null)) throw UsageUnknown();
+        List<ArtifactEntry> remove = [], kept = [];
+        foreach (var group in entries.Where(e => applicationId is null || e.Artifact.ApplicationId == applicationId).GroupBy(e => e.Artifact.ApplicationId))
+        {
+            var available = 0;
+            foreach (var entry in group) // List is already newest first.
+            {
+                if (available < effective) { if (entry.Status == "available") available++; continue; }
+                (entry.InUseBy!.Count > 0 ? kept : remove).Add(entry);
+            }
+        }
+        return new(effective, configured, remove, remove.Sum(e => e.Artifact.Size), kept);
+    }
+    public async Task<RetentionResult> ApplyRetention(int? keep, string? applicationId = null, CancellationToken cancellationToken = default)
+    {
+        if (keep is null && ConfiguredKeepPerApplication == 0)
+            throw new ArtifactImportException(400, "Retention not configured", "Choose how many builds to keep per application, or set Artifacts:KeepPerApplication on the backend.");
+        var plan = await PlanRetention(keep, applicationId, cancellationToken);
+        List<ArtifactRecord> removed = [];
+        List<string> skipped = [];
+        foreach (var entry in plan.Remove)
+        {
+            try { if (await Remove(entry.Artifact, cancellationToken)) removed.Add(entry.Artifact); }
+            catch (ArtifactImportException exception) when (exception.Status == 409) { skipped.Add($"{entry.Artifact.ApplicationId}/{entry.Artifact.BuildId}"); }
+        }
+        return new(plan.KeepPerApplication, removed, removed.Sum(r => r.Size), skipped);
+    }
+    private async Task<bool> Remove(ArtifactRecord record, CancellationToken cancellationToken)
+    {
+        var target = Path.Combine(root, record.ApplicationId, record.BuildId);
+        var trash = Path.Combine(Deleting, Guid.NewGuid().ToString("N"));
+        await storage.WaitAsync(cancellationToken);
+        try
+        {
+            if (!Directory.Exists(target)) return false;
+            Directory.CreateDirectory(Deleting);
+            try { Directory.Move(target, trash); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                throw new ArtifactImportException(409, "Artifact busy",
+                    $"Build {record.BuildId} of '{record.ApplicationId}' could not be removed because its files are in use (for example by a download). Try again shortly.");
+            }
+            try { var parent = Path.GetDirectoryName(target)!; if (!Directory.EnumerateFileSystemEntries(parent).Any()) Directory.Delete(parent); }
+            catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+        finally { storage.Release(); }
+        // The build has left the library; any leftovers are removed on the next start.
+        try { Directory.Delete(trash, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        return true;
     }
     public async Task<ArtifactEntry?> Find(string applicationId, string buildId, CancellationToken cancellationToken = default)
     {

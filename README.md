@@ -105,7 +105,18 @@ $env:TeamCity__Token = '<TeamCity access token>'
 .\gradlew.bat serverRun
 ```
 
-`TeamCity:BaseUrl` must be HTTPS (plain HTTP is accepted only for a loopback TeamCity). The token is sent as `Authorization: Bearer` only to that address; redirects are never followed. The token needs view access to the build configurations and their artifacts. Optional settings: `RequireChecksum` (reject builds without a `.sha256` file), `MaxArtifactBytes` (default 2 GiB) and `DownloadTimeoutMinutes` (default 30). Two imports run at a time; import jobs are kept in memory, so a backend restart discards unfinished imports and their partial files. There is no retention or deletion policy yet.
+`TeamCity:BaseUrl` must be HTTPS (plain HTTP is accepted only for a loopback TeamCity). The token is sent as `Authorization: Bearer` only to that address; redirects are never followed. The token needs view access to the build configurations and their artifacts. Optional settings: `RequireChecksum` (reject builds without a `.sha256` file), `MaxArtifactBytes` (default 2 GiB) and `DownloadTimeoutMinutes` (default 30). Two imports run at a time; import jobs are kept in memory, so a backend restart discards unfinished imports and their partial files.
+
+### Deleting builds and retention
+
+Each library row has a **Delete** action (with an inline confirmation), and the **Retention** panel previews and applies a cleanup that keeps the newest *N* builds per application, ranked by import time. Both rules hold everywhere:
+
+- A build that the latest discovery reports as **installed or running** on an instance in the saved inventory (matched by version or build ID) is never deleted, manually or by retention. It is marked **In use** in the library. Deploy another version and rescan to release it.
+- If the discovery state cannot be read, usage is unknown and nothing is deleted (HTTP 503).
+- Damaged copies do not count towards the kept builds, and those inside the kept window are left so they can be re-imported.
+- A build is moved out of the library before its files are removed, so a half-deleted build never appears; leftovers are cleaned on the next start. A build whose files are busy (for example being downloaded) is skipped with HTTP 409.
+
+Set `Artifacts:KeepPerApplication` (default `0` = keep everything) to apply retention automatically after every new import; the build just imported is always kept. A failed automatic cleanup never fails the import.
 
 ## Build and checks
 
@@ -124,10 +135,10 @@ Linux/macOS: use `sh ./gradlew` with the same tasks (or chmod +x gradlew). Windo
 
 The ZIP contains separate `web/`, `server/`, configuration examples and this README. It does not provision hosting, credentials, live inventory or a reverse proxy. In a deployed setup, serve the client and proxy `/api` to the loopback API under the same origin. API writes reject unexpected browser origins; authentication is still deferred. Keep this version local or behind your existing trusted access boundary.
 
-The API includes inventory GET/PUT, YAML import/export, discovery GET/POST, health, instance lookup, TeamCity status (`GET /api/teamcity`), artifact import jobs (`POST`/`GET /api/artifacts/imports`, `GET /api/artifacts/imports/{id}`) and the artifact library (`GET /api/artifacts`, `GET /api/artifacts/{applicationId}/{buildId}` and `…/download`) under `/api`. Deployment POST returns HTTP 501.
+The API includes inventory GET/PUT, YAML import/export, discovery GET/POST, health, instance lookup, TeamCity status (`GET /api/teamcity`), artifact import jobs (`POST`/`GET /api/artifacts/imports`, `GET /api/artifacts/imports/{id}`) the artifact library (`GET /api/artifacts`, `GET`/`DELETE /api/artifacts/{applicationId}/{buildId}` and `…/download`) and retention (`GET /api/artifacts/retention?keep=N` previews, `POST /api/artifacts/retention` with `{"keepPerApplication": N}` applies; both default to `Artifacts:KeepPerApplication`) under `/api`. Deployment POST returns HTTP 501.
 
 ## Deployment preview and next work
 
 **Overview remains a separately labelled deployment simulation** using browser-local sample artifacts/topology. It does not deploy the saved real inventory. Its TeamCity link entry records sample metadata only; real, verified downloads are in **Artifacts**. Service-changing operations are still disabled.
 
-Next: validate artifact import against the real TeamCity server and agree a retention policy, then durable deployment jobs, bounded deployment execution, health-gated restarts, retries/rollback, then authentication/audit trails and later container support. YAML remains the inventory source of truth; a database may be added for job state.
+Next: validate artifact import against the real TeamCity server and agree the retention count for demo environments, then durable deployment jobs, bounded deployment execution, health-gated restarts, retries/rollback, then authentication/audit trails and later container support. YAML remains the inventory source of truth; a database may be added for job state.

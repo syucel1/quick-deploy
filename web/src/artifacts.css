@@ -24,4 +24,24 @@
 a.inventory-icon-button{display:inline-flex;align-items:center;justify-content:center}
 a.inventory-icon-button:hover{background:#edf4ff;color:#3278d8}
 .artifact-library .inventory-footnote{display:flex;align-items:center;gap:6px}
+button.inventory-icon-button.artifact-delete:hover:not(:disabled){background:#fff0f1;color:#bd4861}
+button.inventory-icon-button.artifact-delete:disabled{opacity:.35;cursor:not-allowed}
+.artifact-in-use{display:inline-flex!important;align-items:center;gap:4px;margin-top:4px;color:#3278d8!important;font-weight:500}
+.artifact-confirming td{background:#fffafb}
+.artifact-confirm{align-items:center;gap:6px;white-space:nowrap}
+.artifact-confirm span{font-size:10px;color:#a5475c}
+.artifact-danger{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:6px;padding:7px 12px;font-size:11px;font-weight:600;background:#c94a64;color:white;cursor:pointer}
+.artifact-danger:hover:not(:disabled){background:#b03a53}
+.artifact-danger:disabled{opacity:.6;cursor:progress}
+.artifact-notice{background:#f1faf5;border:1px solid #cfe9db;color:#2a7a55;align-items:center}
+.artifact-notice span{flex:1}
+.artifact-retention-form{display:flex;align-items:center;gap:10px;padding:0 22px 18px;font-size:11px;color:#5d7393;flex-wrap:wrap}
+.artifact-retention-form input{width:72px;border:1px solid #dce4f0;border-radius:6px;padding:8px 10px;font-size:11px}
+.artifact-retention-form input[aria-invalid=true]{border-color:#e7a5b3}
+.artifact-retention-plan{margin:0 22px 20px;border:1px solid #e5ebf3;border-radius:7px;padding:14px 16px;display:grid;gap:10px;font-size:11px}
+.artifact-retention-plan p{margin:0;color:#3d5272;line-height:1.6}
+.artifact-retention-plan ul{list-style:none;margin:0;padding:0;display:grid;gap:5px;max-height:220px;overflow:auto}
+.artifact-retention-plan li span{color:#8596ad;margin-left:4px}
+.artifact-retention-plan ul.protected li{display:flex;align-items:center;gap:5px;color:#3278d8}
+.artifact-retention-actions{display:flex;gap:8px}
 @media (max-width:700px){.artifact-import{flex-direction:column}}
